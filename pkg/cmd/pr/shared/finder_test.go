@@ -701,18 +701,28 @@ func TestPRRefs_GetPRHeadLabel(t *testing.T) {
 		{
 			name: "When the HeadRepo and BaseRepo match, it returns the branch name",
 			prRefs: PullRequestRefs{
-				BranchName: "blueberries",
-				HeadRepo:   originRepo,
-				BaseRepo:   originRepo,
+				HeadRef: PullRequestRef{
+					Repo:       originRepo,
+					BranchName: "blueberries",
+				},
+				BaseRef: PullRequestRef{
+					Repo:       originRepo,
+					BranchName: "", // TODO SMELL
+				},
 			},
 			want: "blueberries",
 		},
 		{
 			name: "When the HeadRepo and BaseRepo do not match, it returns the prepended HeadRepo owner to the branch name",
 			prRefs: PullRequestRefs{
-				BranchName: "blueberries",
-				HeadRepo:   originRepo,
-				BaseRepo:   upstreamRepo,
+				HeadRef: PullRequestRef{
+					Repo:       originRepo,
+					BranchName: "blueberries",
+				},
+				BaseRef: PullRequestRef{
+					Repo:       upstreamRepo,
+					BranchName: "", // TODO SMELL
+				},
 			},
 			want: "ORIGINOWNER:blueberries",
 		},
@@ -733,32 +743,40 @@ func TestPullRequestRefs_HasHead(t *testing.T) {
 		{
 			name: "HeadRepo is nil and BranchName is empty, return false",
 			prRefs: PullRequestRefs{
-				HeadRepo:   nil,
-				BranchName: "",
+				HeadRef: PullRequestRef{
+					Repo:       nil,
+					BranchName: "",
+				},
 			},
 			want: false,
 		},
 		{
 			name: "HeadRepo is not nil and BranchName is empty, return false",
 			prRefs: PullRequestRefs{
-				HeadRepo:   ghrepo.New("ORIGINOWNER", "REPO"),
-				BranchName: "",
+				HeadRef: PullRequestRef{
+					Repo:       ghrepo.New("ORIGINOWNER", "REPO"),
+					BranchName: "",
+				},
 			},
 			want: false,
 		},
 		{
 			name: "HeadRepo is nil and BranchName is not empty, return false",
 			prRefs: PullRequestRefs{
-				HeadRepo:   nil,
-				BranchName: "feature-branch",
+				HeadRef: PullRequestRef{
+					Repo:       nil,
+					BranchName: "feature-branch",
+				},
 			},
 			want: false,
 		},
 		{
 			name: "HeadRepo is not nil and BranchName is not empty, return true",
 			prRefs: PullRequestRefs{
-				HeadRepo:   ghrepo.New("ORIGINOWNER", "REPO"),
-				BranchName: "feature-branch",
+				HeadRef: PullRequestRef{
+					Repo:       ghrepo.New("ORIGINOWNER", "REPO"),
+					BranchName: "feature-branch",
+				},
 			},
 			want: true,
 		},

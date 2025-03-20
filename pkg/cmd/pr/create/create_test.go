@@ -1683,9 +1683,14 @@ func Test_generateCompareURL(t *testing.T) {
 			name: "basic",
 			ctx: CreateContext{
 				PrRefs: shared.PullRequestRefs{
-					BaseRepo:   api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "OWNER"}}, "github.com"),
-					HeadRepo:   api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "OWNER"}}, "github.com"),
-					BranchName: "feature",
+					BaseRef: shared.PullRequestRef{
+						Repo:       api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "OWNER"}}, "github.com"),
+						BranchName: "", // TODO: smell?
+					},
+					HeadRef: shared.PullRequestRef{
+						Repo:       api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "OWNER"}}, "github.com"),
+						BranchName: "feature",
+					},
 				},
 				BaseBranch: "main",
 			},
@@ -1696,9 +1701,14 @@ func Test_generateCompareURL(t *testing.T) {
 			name: "with labels",
 			ctx: CreateContext{
 				PrRefs: shared.PullRequestRefs{
-					BaseRepo:   api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "OWNER"}}, "github.com"),
-					HeadRepo:   api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "OWNER"}}, "github.com"),
-					BranchName: "b",
+					BaseRef: shared.PullRequestRef{
+						Repo:       api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "OWNER"}}, "github.com"),
+						BranchName: "", // TODO: smell?
+					},
+					HeadRef: shared.PullRequestRef{
+						Repo:       api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "OWNER"}}, "github.com"),
+						BranchName: "b",
+					},
 				},
 				BaseBranch: "a",
 			},
@@ -1712,9 +1722,14 @@ func Test_generateCompareURL(t *testing.T) {
 			name: "'/'s in branch names/labels are percent-encoded",
 			ctx: CreateContext{
 				PrRefs: shared.PullRequestRefs{
-					BaseRepo:   api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "UPSTREAMOWNER"}}, "github.com"),
-					HeadRepo:   api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "ORIGINOWNER"}}, "github.com"),
-					BranchName: "feature",
+					BaseRef: shared.PullRequestRef{
+						Repo:       api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "UPSTREAMOWNER"}}, "github.com"),
+						BranchName: "", // TODO: smell?
+					},
+					HeadRef: shared.PullRequestRef{
+						Repo:       api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "ORIGINOWNER"}}, "github.com"),
+						BranchName: "feature",
+					},
 				},
 				BaseBranch: "main/trunk",
 			},
@@ -1731,9 +1746,14 @@ func Test_generateCompareURL(t *testing.T) {
 			*/
 			ctx: CreateContext{
 				PrRefs: shared.PullRequestRefs{
-					BaseRepo:   api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "UPSTREAMOWNER"}}, "github.com"),
-					HeadRepo:   api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "ORIGINOWNER"}}, "github.com"),
-					BranchName: "!$&'()+,;=@",
+					BaseRef: shared.PullRequestRef{
+						Repo:       api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "UPSTREAMOWNER"}}, "github.com"),
+						BranchName: "", // TODO: smell?
+					},
+					HeadRef: shared.PullRequestRef{
+						Repo:       api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "ORIGINOWNER"}}, "github.com"),
+						BranchName: "!$&'()+,;=@",
+					},
 				},
 				BaseBranch: "main/trunk",
 			},
@@ -1744,9 +1764,14 @@ func Test_generateCompareURL(t *testing.T) {
 			name: "with template",
 			ctx: CreateContext{
 				PrRefs: shared.PullRequestRefs{
-					BaseRepo:   api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "OWNER"}}, "github.com"),
-					HeadRepo:   api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "OWNER"}}, "github.com"),
-					BranchName: "feature",
+					BaseRef: shared.PullRequestRef{
+						Repo:       api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "OWNER"}}, "github.com"),
+						BranchName: "", // TODO: smell?
+					},
+					HeadRef: shared.PullRequestRef{
+						Repo:       api.InitRepoHostname(&api.Repository{Name: "REPO", Owner: api.RepositoryOwner{Login: "OWNER"}}, "github.com"),
+						BranchName: "feature",
+					},
 				},
 				BaseBranch: "main",
 			},

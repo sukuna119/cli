@@ -125,7 +125,7 @@ func statusRun(opts *StatusOptions) error {
 			if err != nil {
 				return err
 			}
-			currentHeadRefBranchName = prRefs.BranchName
+			currentHeadRefBranchName = prRefs.HeadRef.BranchName
 		}
 	}
 
