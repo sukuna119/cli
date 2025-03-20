@@ -18,6 +18,7 @@ import (
 	fd "github.com/cli/cli/v2/internal/featuredetection"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmdutil"
+	o "github.com/cli/cli/v2/pkg/option"
 	"github.com/cli/cli/v2/pkg/set"
 	"github.com/shurcooL/githubv4"
 	"golang.org/x/sync/errgroup"
@@ -102,10 +103,17 @@ type FindOptions struct {
 // A ref is described as "remoteName/branchName", so
 // headRepoName/headBranchName -----PR-----> baseRepoName/baseBranchName
 type PullRequestRefs struct {
+	// Head       PullRequestRef
+	// Base       PullRequestRef
 	BranchName string
 	HeadRepo   ghrepo.Interface
 	BaseRepo   ghrepo.Interface
 }
+
+// type PullRequestRef struct {
+// 	Branch string
+// 	Repo   ghrepo.Interface
+// }
 
 func (s *PullRequestRefs) HasHead() bool {
 	return s.HeadRepo != nil && s.BranchName != ""
@@ -304,6 +312,195 @@ func (f *finder) parseURL(prURL string) (ghrepo.Interface, int, error) {
 	repo := ghrepo.NewWithHost(m[1], m[2], u.Hostname())
 	prNumber, _ := strconv.Atoi(m[3])
 	return repo, prNumber, nil
+}
+
+// type gitRefsForPR struct {
+// 	base git.RemoteTrackingRef
+// 	head git.RemoteTrackingRef
+// }
+
+// type PRRefs struct {
+// 	BasePRRef BasePRRef
+// 	HeadPRRef HeadPRRef
+// }
+
+// type BasePRRef struct {
+// 	Repo   ghrepo.Interface
+// 	Branch o.Option[string]
+// }
+
+// type HeadPRRef struct {
+// 	Repo   ghrepo.Interface
+// 	Branch string
+// }
+
+type either[T1 any, T2 any] struct {
+	left  o.Option[T1]
+	right o.Option[T2]
+}
+
+func left[T1 any, T2 any](v T1) either[T1, T2] {
+	return either[T1, T2]{left: o.Some(v)}
+}
+
+func right[T1 any, T2 any](v T2) either[T1, T2] {
+	return either[T1, T2]{right: o.Some(v)}
+}
+
+func eitherMatch[T1 any, T2 any, R any](e either[T1, T2], leftFn func(T1) R, rightFn func(T2) R) R {
+	if v, present := e.left.Value(); present {
+		return leftFn(v)
+	}
+	if v, present := e.right.Value(); present {
+		return rightFn(v)
+	}
+	panic("eitherMatch: neither value present")
+}
+
+type pushLocation struct {
+	remote     either[string, *url.URL]
+	branchName string
+}
+
+func pushLocationForBranch(gitClient gitConfigClient, branch string) (o.Option[pushLocation], error) {
+	// If @{push} resolves, then we have the remote tracking branch already, no problem.
+	if pushRevisionRef, err := gitClient.PushRevision(context.Background(), branch); err == nil {
+		return o.Some(pushLocation{
+			remote:     left[string, *url.URL](pushRevisionRef.Remote),
+			branchName: pushRevisionRef.Branch,
+		}), nil
+	}
+
+	// But it doesn't always resolve, so we can suppress the error and move on to other means
+	// of determination. We'll first look at branch and remote configuration to make a determination.
+	// We start by assuming that BaseRepo and HeadRepo are the same, and the branch name is
+	// the same as the local branch name, unless we find otherwise.
+	branchConfig, err := gitClient.ReadBranchConfig(context.Background(), branch)
+	if err != nil {
+		return o.None[pushLocation](), err
+	}
+
+	pushDefault, err := gitClient.PushDefault(context.Background())
+	if err != nil {
+		return o.None[pushLocation](), err
+	}
+
+	// We assume the PR's branch name is the same as whatever was provided, unless the user has specified
+	// push.default = upstream or tracking, then we use the branch name from the merge ref.
+	remoteBranch := branch
+	if pushDefault == git.PushDefaultUpstream || pushDefault == git.PushDefaultTracking {
+		remoteBranch = strings.TrimPrefix(branchConfig.MergeRef, "refs/heads/")
+	}
+
+	// To get the remote, we look to the git config. It comes from one of the following, in order of precedence:
+	// 1. branch.<name>.pushRemote
+	// 2. remote.pushDefault
+	// 3. branch.<name>.remote
+	if branchConfig.PushRemoteName != "" {
+		return o.Some(pushLocation{
+			remote:     left[string, *url.URL](branchConfig.PushRemoteName),
+			branchName: remoteBranch,
+		}), nil
+	}
+
+	if branchConfig.PushRemoteURL != nil {
+		return o.Some(pushLocation{
+			remote:     right[string](branchConfig.PushRemoteURL),
+			branchName: remoteBranch,
+		}), nil
+	}
+
+	remotePushDefault, err := gitClient.RemotePushDefault(context.Background())
+	if err != nil {
+		return o.None[pushLocation](), err
+	}
+
+	if remotePushDefault != "" {
+		return o.Some(pushLocation{
+			remote:     left[string, *url.URL](remotePushDefault),
+			branchName: remoteBranch,
+		}), nil
+	}
+
+	if branchConfig.RemoteName != "" {
+		return o.Some(pushLocation{
+			remote:     left[string, *url.URL](branchConfig.RemoteName),
+			branchName: remoteBranch,
+		}), nil
+	}
+
+	if branchConfig.RemoteURL != nil {
+		return o.Some(pushLocation{
+			remote:     right[string](branchConfig.RemoteURL),
+			branchName: remoteBranch,
+		}), nil
+	}
+
+	// If we couldn't find the necessary information, indicate that with a None,
+	// so that the caller can make a decision about how to proceed.
+	return o.None[pushLocation](), nil
+}
+
+func GetPRRefs(gitClient gitConfigClient, remotes remotes.Remotes, branch string) (PullRequestRefs, error) {
+	pushLocation, err := pushLocationForBranch(gitClient, branch)
+	if err != nil {
+		return PullRequestRefs{}, err
+	}
+
+	var remoteNameToRepo = func(remoteName string) ghrepo.Interface {
+		remote, err := remotes.FindByName(remoteName)
+		if err != nil {
+			panic("TODO: make either smarter")
+		}
+		return remote.Repo
+	}
+
+	var remoteURLToRepo = func(remoteURL *url.URL) ghrepo.Interface {
+		repo, err := ghrepo.FromURL(remoteURL)
+		if err != nil {
+			panic("TODO: make either smarter")
+		}
+		return repo
+	}
+
+	// If we have a push location, then use it to lookup the repo.
+	if pushLocation, present := pushLocation.Value(); present {
+		return PullRequestRefs{
+			HeadRepo:   eitherMatch(pushLocation.remote, remoteNameToRepo, remoteURLToRepo),
+			BranchName: pushLocation.branchName,
+		}, nil
+
+		// if remoteName, present := pushLocation.remoteName.Value(); present {
+		// 	// If we have a remote, then use it to lookup the repo.
+		// 	remote, err := remotes.FindByName(remoteName)
+		// 	if err != nil {
+		// 		return PullRequestRefs{}, err
+		// 	}
+		// 	return PullRequestRefs{
+		// 		HeadRepo:   remote.Repo,
+		// 		BranchName: pushLocation.branchName,
+		// 	}, nil
+		// }
+
+		// if remoteURL, present := pushLocation.remoteURL.Value(); present {
+		// 	// If we have a repo URL, then use it to lookup the repo.
+		// 	repo, err := ghrepo.FromURL(remoteURL)
+		// 	if err != nil {
+		// 		return PullRequestRefs{}, fmt.Errorf("could not parse push remote URL %q: %w", remoteURL, err)
+		// 	}
+		// 	return PullRequestRefs{
+		// 		HeadRepo:   repo,
+		// 		BranchName: pushLocation.branchName,
+		// 	}, nil
+		// }
+
+		// If we get here, something has gone wrong progammatically because a push location must have a remote or a remote URL.
+		// Sadly, Go doesn't have sumtypes so it's not easy to make this a compile-time error.
+		// TODO: Improve error message.
+		// return PullRequestRefs{}, fmt.Errorf("push location must have a remote or remote URL, but got neither")
+	}
+
+	return PullRequestRefs{}, nil
 }
 
 func ResolvePRRefs(gitClient gitConfigClient, remotes remotes.Remotes, baseRepo ghrepo.Interface, localBranchName string) (PullRequestRefs, error) {
