@@ -622,7 +622,7 @@ func NewCreateContext(opts *CreateOptions) (*CreateContext, error) {
 		return nil, err
 	}
 
-	prRefs, err := shared.ResolvePRRefs(gitClientWithCachedBranchConfig{
+	prRefs, err := shared.ResolvePullRequestRefs(gitClientWithCachedBranchConfig{
 		cachedBranchConfig: targetHeadBranchConfig,
 		Client:             gitClient,
 	}, remotes, targetBaseRepo, targetHeadBranch)

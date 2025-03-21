@@ -173,7 +173,7 @@ func (f *finder) Find(opts FindOptions) (*api.PullRequest, ghrepo.Interface, err
 				return nil, nil, err
 			}
 
-			prRefs, err = ResolvePRRefs(f.gitConfigClient, rems, f.baseRefRepo, f.branchName)
+			prRefs, err = ResolvePullRequestRefs(f.gitConfigClient, rems, f.baseRefRepo, f.branchName)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -343,36 +343,63 @@ func (ru remoteURL) toRepo(_ remotes.Remotes) (ghrepo.Interface, error) {
 	return repo, nil
 }
 
-type pushTarget struct {
+// A defaultPushTarget represents the remote name or URL and a branch name
+// that we would expect a branch to be pushed to if `git push` were run with
+// no further arguments. This is the most likely place for the head of the PR
+// to be, but it's not guaranteed. The user may have pushed to another branch
+// directly via `git push <remote> <local>:<remote>` and not set up tracking information.
+// A branch name is always present.
+//
+// It's possible that we're unable to determine a remote, if the user had pushed directly
+// to a URL for example `git push <url> <branch>`, which is why it is optional. When present,
+// the remote may either be a name or a URL.
+type defaultPushTarget struct {
 	remote     o.Option[remote]
 	branchName string
 }
 
-func newPushTarget(remote remote, branchName string) pushTarget {
-	return pushTarget{
+// newDefaultPushTarget is a thin wrapper over defaultPushTarget to help with
+// generic type inference, to reduce verbosity in repeating the parametric type.
+func newDefaultPushTarget(remote remote, branchName string) defaultPushTarget {
+	return defaultPushTarget{
 		remote:     o.Some(remote),
 		branchName: branchName,
 	}
 }
 
-func pushTargetForBranch(gitClient gitConfigClient, branch string) (pushTarget, error) {
+// determineDefaultPushTarget uses git configuration to make a best guess about where a branch
+// is pushed to, and where it would be pushed to if the user ran `git push` with no additional
+// arguments.
+//
+// Firstly, it attempts to resolve the @{push} ref, which is the most reliable method, as this
+// is what git uses to determine the remote tracking branch
+//
+// If this fails, we go through a series of steps to determine the remote, firstly by checking
+// branch configuration which takes the form `branch.<name>.pushRemote = <name> | <url>`. If this is
+// not set, then we check the remote configuration, which is `remote.pushDefault = <name>`. Finally,
+// we check the branch configuration again for `branch.<name>.remote = <name> | <url>`.
+// If none of these are set, we indicate that we were unable to determine the remote by returning
+// a None value for the remote.
+//
+// The branch name is always set. The deafult configuration for push.default (current) indicates
+// that a git push should use the same remote branch name as the local branch name. If push.default
+// is set to upstream or tracking (deprecated form of upstream), then we use the branch name from the merge ref.
+func determineDefaultPushTarget(gitClient gitConfigClient, branch string) (defaultPushTarget, error) {
 	// If @{push} resolves, then we have the remote tracking branch already, no problem.
 	if pushRevisionRef, err := gitClient.PushRevision(context.Background(), branch); err == nil {
-		return newPushTarget(remoteName{pushRevisionRef.Remote}, pushRevisionRef.Branch), nil
+		return newDefaultPushTarget(remoteName{pushRevisionRef.Remote}, pushRevisionRef.Branch), nil
 	}
 
 	// But it doesn't always resolve, so we can suppress the error and move on to other means
 	// of determination. We'll first look at branch and remote configuration to make a determination.
-	// We start by assuming that BaseRepo and HeadRepo are the same, and the branch name is
-	// the same as the local branch name, unless we find otherwise.
 	branchConfig, err := gitClient.ReadBranchConfig(context.Background(), branch)
 	if err != nil {
-		return pushTarget{}, err
+		return defaultPushTarget{}, err
 	}
 
 	pushDefault, err := gitClient.PushDefault(context.Background())
 	if err != nil {
-		return pushTarget{}, err
+		return defaultPushTarget{}, err
 	}
 
 	// We assume the PR's branch name is the same as whatever was provided, unless the user has specified
@@ -383,18 +410,18 @@ func pushTargetForBranch(gitClient gitConfigClient, branch string) (pushTarget, 
 	}
 
 	// To get the remote, we look to the git config. It comes from one of the following, in order of precedence:
-	// 1. branch.<name>.pushRemote
-	// 2. remote.pushDefault
-	// 3. branch.<name>.remote
+	// 1. branch.<name>.pushRemote (which may be a name or a URL)
+	// 2. remote.pushDefault (which is a remote name)
+	// 3. branch.<name>.remote (which may be a name or a URL)
 	if branchConfig.PushRemoteName != "" {
-		return newPushTarget(
+		return newDefaultPushTarget(
 			remoteName{branchConfig.PushRemoteName},
 			remoteBranch,
 		), nil
 	}
 
 	if branchConfig.PushRemoteURL != nil {
-		return newPushTarget(
+		return newDefaultPushTarget(
 			remoteURL{branchConfig.PushRemoteURL},
 			remoteBranch,
 		), nil
@@ -402,46 +429,84 @@ func pushTargetForBranch(gitClient gitConfigClient, branch string) (pushTarget, 
 
 	remotePushDefault, err := gitClient.RemotePushDefault(context.Background())
 	if err != nil {
-		return pushTarget{}, err
+		return defaultPushTarget{}, err
 	}
 
 	if remotePushDefault != "" {
-		return newPushTarget(
+		return newDefaultPushTarget(
 			remoteName{remotePushDefault},
 			remoteBranch,
 		), nil
 	}
 
 	if branchConfig.RemoteName != "" {
-		return newPushTarget(
+		return newDefaultPushTarget(
 			remoteName{branchConfig.RemoteName},
 			remoteBranch,
 		), nil
 	}
 
 	if branchConfig.RemoteURL != nil {
-		return newPushTarget(
+		return newDefaultPushTarget(
 			remoteURL{branchConfig.RemoteURL},
 			remoteBranch,
 		), nil
 	}
 
 	// If we couldn't find the remote, we'll indicate that to the caller via None.
-	return pushTarget{branchName: remoteBranch}, nil
+	return defaultPushTarget{
+		remote:     o.None[remote](),
+		branchName: remoteBranch,
+	}, nil
 }
 
-func ResolvePRRefs(gitClient gitConfigClient, remotes remotes.Remotes, baseRepo ghrepo.Interface, localBranchName string) (PullRequestRefs, error) {
-	pushTarget, err := pushTargetForBranch(gitClient, localBranchName)
+// defaultHeadPRRef is a neighbour to defaultPushTarget, but instead of holding
+// basic git remote information, it holds a resolved repository in `gh` terms.
+//
+// Since we may not be able to determine a default remote for a branch, this
+// is also true of the resolved repository.
+type defaultHeadPRRef struct {
+	repo       o.Option[ghrepo.Interface]
+	branchName string
+}
+
+// resolveHeadPRRef is a thin wrapper around determineDefaultPushTarget, which attempts to convert
+// a present remote into a resolved repository. If the remote is not present, we indicate that to the caller
+// by returning a None value for the repo.
+func resolveHeadPRRef(gitClient gitConfigClient, remotes remotes.Remotes, branch string) (defaultHeadPRRef, error) {
+	pushTarget, err := determineDefaultPushTarget(gitClient, branch)
+	if err != nil {
+		return defaultHeadPRRef{}, err
+	}
+
+	// If we have no remote, let the caller decide what to do by indicating that with a None.
+	if pushTarget.remote.IsNone() {
+		return defaultHeadPRRef{
+			repo:       o.None[ghrepo.Interface](),
+			branchName: pushTarget.branchName,
+		}, nil
+	}
+
+	repo, err := pushTarget.remote.Unwrap().toRepo(remotes)
+	if err != nil {
+		return defaultHeadPRRef{}, err
+	}
+
+	return defaultHeadPRRef{
+		repo:       o.Some(repo),
+		branchName: pushTarget.branchName,
+	}, nil
+}
+
+func ResolvePullRequestRefs(gitClient gitConfigClient, remotes remotes.Remotes, baseRepo ghrepo.Interface, branch string) (PullRequestRefs, error) {
+	headPRRef, err := resolveHeadPRRef(gitClient, remotes, branch)
 	if err != nil {
 		return PullRequestRefs{}, err
 	}
 
-	// Now let's take our push location and see if there is a repo to resolve it to.
-	if remote, present := pushTarget.remote.Value(); present {
-		repo, err := remote.toRepo(remotes)
-		if err != nil {
-			return PullRequestRefs{}, err
-		}
+	// If the repo was resolved, we can just convert the response
+	// to a PullRequestRef and return it.
+	if repo, present := headPRRef.repo.Value(); present {
 		return PullRequestRefs{
 			BaseRef: PullRequestRef{
 				Repo:       baseRepo,
@@ -449,7 +514,7 @@ func ResolvePRRefs(gitClient gitConfigClient, remotes remotes.Remotes, baseRepo 
 			},
 			HeadRef: PullRequestRef{
 				Repo:       repo,
-				BranchName: pushTarget.branchName,
+				BranchName: headPRRef.branchName,
 			},
 		}, nil
 	}
@@ -464,8 +529,8 @@ func ResolvePRRefs(gitClient gitConfigClient, remotes remotes.Remotes, baseRepo 
 			BranchName: "", // we don't know it here? Perhaps a smell
 		},
 		HeadRef: PullRequestRef{
-			Repo:       baseRepo,
-			BranchName: pushTarget.branchName,
+			Repo:       baseRepo, // <--- base repo
+			BranchName: headPRRef.branchName,
 		},
 	}, nil
 }

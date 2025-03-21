@@ -118,7 +118,7 @@ func statusRun(opts *StatusOptions) error {
 				return err
 			}
 
-			prRefs, err := shared.ResolvePRRefs(gitClientWithCachedBranchConfig{
+			prRefs, err := shared.ResolvePullRequestRefs(gitClientWithCachedBranchConfig{
 				cachedBranchConfig: branchConfig,
 				Client:             opts.GitClient,
 			}, remotes, baseRefRepo, currentBranchName)
